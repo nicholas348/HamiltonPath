@@ -1,4 +1,5 @@
 from manim import *
+import random
 
 
 class PathFindingGraph(VGroup):
@@ -10,6 +11,8 @@ class PathFindingGraph(VGroup):
         self.edge_list = edges or []
         self.non_hamilton_path = []
         self.hamilton_path = []
+        self.non_eulerian_path = []
+        self.eulerian_path = []
         self.show_labels = show_labels
         self.label_type = label_type  # "index" or "coord"
 
@@ -101,12 +104,10 @@ class PathFindingGraph(VGroup):
         return neighbors
 
     def find_non_hamilton_path(self):
-        """Find a path that cannot be a Hamilton path using greedy DFS."""
-        if self.non_hamilton_path:
-            return self.non_hamilton_path
-
+        """Find a path that cannot be a Hamilton path using randomized greedy DFS."""
         n = len(self.dot_positions)
-        for start in range(n):
+        starts = list(range(n - 1, -1, -1))
+        for start in starts:
             visited = {start}
             path = [start]
             current = start
@@ -116,6 +117,7 @@ class PathFindingGraph(VGroup):
                 unvisited = [nb for nb in neighbors if nb not in visited]
                 if not unvisited:
                     break
+                random.shuffle(unvisited)
                 next_dot = unvisited[0]
                 visited.add(next_dot)
                 path.append(next_dot)
@@ -159,10 +161,21 @@ class PathFindingGraph(VGroup):
         self.hamilton_path = []
         return self.hamilton_path
 
-    def show_non_hamilton_graph(self, scene, run_time=0.5):
+    def show_non_hamilton_graph(self, scene, run_time=0.5, recompute=False, max_tries=10):
         """Animate a non-Hamilton path: yellow while exploring, red on failure, then reset."""
+        previous_path = list(self.non_hamilton_path) if self.non_hamilton_path else []
+
+        if recompute:
+            self.non_hamilton_path = []
+
         if not self.non_hamilton_path:
-            self.find_non_hamilton_path()
+            for _ in range(max_tries):
+                self.find_non_hamilton_path()
+                if self.non_hamilton_path and self.non_hamilton_path != previous_path:
+                    break
+                if recompute:
+                    self.non_hamilton_path = []
+
         if not self.non_hamilton_path:
             return
 
@@ -190,7 +203,7 @@ class PathFindingGraph(VGroup):
             run_time=run_time,
         )
 
-    def show_hamilton_graph(self, scene, run_time=0.5):
+    def show_hamilton_graph(self, scene, run_time=0.5, delay_after=1):
         """Animate the Hamilton path: yellow while exploring, green on success, then reset."""
         if not self.hamilton_path:
             self.find_hamilton_path()
@@ -214,6 +227,156 @@ class PathFindingGraph(VGroup):
             *[self.get_line_between(path[m], path[m + 1]).animate.set_color(GREEN)
               for m in range(len(path) - 1)],
         )
+
+        scene.wait(delay_after)
+
+        scene.play(
+            self.dots.animate.set_color(WHITE),
+            self.lines.animate.set_color(WHITE),
+            run_time=run_time,
+        )
+
+    # --- Eulerian path ---
+
+    def _build_adjacency(self):
+        """Build adjacency list with edge indices for Eulerian algorithms."""
+        n = len(self.dot_positions)
+        adj = [[] for _ in range(n)]
+        for idx, (u, v) in enumerate(self.edge_list):
+            adj[u].append((v, idx))
+            adj[v].append((u, idx))
+        return adj
+
+    def find_non_eulerian_path(self):
+        """Find a path that fails to traverse all edges using greedy edge traversal."""
+        if self.non_eulerian_path:
+            return self.non_eulerian_path
+
+        num_edges = len(self.edge_list)
+        n = len(self.dot_positions)
+        adj = self._build_adjacency()
+
+        for start in range(n):
+            used = set()
+            path = [start]
+            current = start
+            while True:
+                found = False
+                for nb, edge_idx in adj[current]:
+                    if edge_idx not in used:
+                        used.add(edge_idx)
+                        path.append(nb)
+                        current = nb
+                        found = True
+                        break
+                if not found:
+                    break
+            if len(used) < num_edges:
+                self.non_eulerian_path = path
+                return self.non_eulerian_path
+
+        self.non_eulerian_path = []
+        return self.non_eulerian_path
+
+    def find_eulerian_path(self):
+        """Find an Eulerian path using Hierholzer's algorithm."""
+        if self.eulerian_path:
+            return self.eulerian_path
+
+        n = len(self.dot_positions)
+        num_edges = len(self.edge_list)
+        adj = self._build_adjacency()
+
+        odd_nodes = [i for i in range(n) if len(adj[i]) % 2 == 1]
+        if len(odd_nodes) != 0 and len(odd_nodes) != 2:
+            self.eulerian_path = []
+            return self.eulerian_path
+
+        start = odd_nodes[0] if odd_nodes else 0
+
+        used = [False] * num_edges
+        stack = [start]
+        path = []
+        adj_ptr = [0] * n
+
+        while stack:
+            v = stack[-1]
+            found = False
+            while adj_ptr[v] < len(adj[v]):
+                nb, edge_idx = adj[v][adj_ptr[v]]
+                adj_ptr[v] += 1
+                if not used[edge_idx]:
+                    used[edge_idx] = True
+                    stack.append(nb)
+                    found = True
+                    break
+            if not found:
+                path.append(stack.pop())
+
+        path.reverse()
+        if len(path) != num_edges + 1:
+            self.eulerian_path = []
+        else:
+            self.eulerian_path = path
+        return self.eulerian_path
+
+    def show_non_eulerian_graph(self, scene, run_time=0.5):
+        """Animate a non-Eulerian path: yellow while exploring, red on failure, then reset."""
+        if not self.non_eulerian_path:
+            self.find_non_eulerian_path()
+        if not self.non_eulerian_path:
+            return
+
+        path = self.non_eulerian_path
+
+        for i in range(len(path) - 1):
+            u, v = path[i], path[i + 1]
+            line = self.get_line_between(u, v)
+            scene.play(
+                line.animate.set_color(YELLOW),
+                self.dots[u].animate.set_color(YELLOW),
+                self.dots[v].animate.set_color(YELLOW),
+                run_time=run_time,
+            )
+
+        visited_dots = set(path)
+        scene.play(
+            *[self.dots[m].animate.set_color(RED) for m in visited_dots],
+            *[self.get_line_between(path[m], path[m + 1]).animate.set_color(RED)
+              for m in range(len(path) - 1)],
+        )
+
+        scene.play(
+            self.dots.animate.set_color(WHITE),
+            self.lines.animate.set_color(WHITE),
+            run_time=run_time,
+        )
+
+    def show_eulerian_graph(self, scene, run_time=0.5, delay_after=1):
+        """Animate the Eulerian path: yellow while exploring, green on success, then reset."""
+        if not self.eulerian_path:
+            self.find_eulerian_path()
+        if not self.eulerian_path:
+            return
+
+        path = self.eulerian_path
+
+        for i in range(len(path) - 1):
+            u, v = path[i], path[i + 1]
+            line = self.get_line_between(u, v)
+            scene.play(
+                line.animate.set_color(YELLOW),
+                self.dots[u].animate.set_color(YELLOW),
+                self.dots[v].animate.set_color(YELLOW),
+                run_time=run_time,
+            )
+
+        scene.play(
+            self.dots.animate.set_color(GREEN),
+            self.lines.animate.set_color(GREEN),
+        )
+
+        scene.wait(delay_after)
 
         scene.play(
             self.dots.animate.set_color(WHITE),
